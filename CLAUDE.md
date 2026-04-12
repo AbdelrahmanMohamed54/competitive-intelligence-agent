@@ -111,8 +111,8 @@ What counts as a meaningful change:
 4. ✅ observability/langfuse_tracer.py — tracing setup
 5. ✅ agents/news_analyst.py — first sub-agent
 6. ✅ agents/academic_researcher.py — second sub-agent
-7. agents/competitor_profiler.py — third sub-agent
-8. agents/report_writer.py — synthesis agent
+7. ✅ agents/competitor_profiler.py — third sub-agent
+8. ✅ agents/report_writer.py — synthesis agent
 9. agents/orchestrator.py — LangGraph state machine wiring all agents
 10. app/api.py — FastAPI endpoint
 11. app/streamlit_app.py — Streamlit frontend
@@ -165,3 +165,32 @@ Every sub-agent follows this exact structure — copy this for competitor_profil
 - Each agent uses its own named ChromaDB collection so search spaces don't mix
 - trace_agent context manager is synchronous (contextmanager, not asynccontextmanager)
   because it just wraps async code, not awaits inside the context body itself
+
+## Session 3 — complete (2026-04-12)
+### Tasks finished
+- agents/competitor_profiler.py: 4-query search pattern (competitors, comparisons,
+  positioning, pricing); handles no-competitor case gracefully; 3 unit tests
+- agents/report_writer.py: synthesis agent — RAG retrieval from all 3 ChromaDB
+  collections, 2 LLM calls (executive_summary + strategic_recommendations),
+  pass-through of already-structured sections, model_validate() for safety,
+  score_output() quality marker, per-section fallback placeholders; 4 unit tests
+- tests/test_agents.py: expanded to 16 tests covering all 4 sub-agents (42 total)
+
+### All 4 sub-agents are complete and unit-tested
+1. news_analyst — DevelopmentItem list, 3 parallel searches
+2. academic_researcher — AcademicItem list, 3 parallel searches
+3. competitor_profiler — CompetitorItem list, 4 parallel searches
+4. report_writer — synthesises all findings into validated ReportSchema
+
+### Design decisions (Session 3)
+- Report writer makes exactly 2 LLM calls (executive_summary + recommendations);
+  the 3 structured sections are pass-throughs from sub-agent output to avoid
+  hallucination and stay under the 90-second budget
+- RAG context retrieval in report_writer is best-effort: individual collection
+  failures are silently skipped (debug-logged) so one missing collection doesn't
+  block synthesis
+- ReportSchema.model_validate({...}) used instead of direct constructor so that
+  nested model dicts (from .model_dump()) are correctly coerced
+- score_output() receives a section-completeness float (0.0–1.0) as initial
+  quality signal; the LLM-as-judge evaluation pipeline in Session 6 will overwrite
+  this with a semantic quality score
