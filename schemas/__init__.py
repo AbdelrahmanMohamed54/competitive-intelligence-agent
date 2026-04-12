@@ -9,6 +9,7 @@ from schemas.report_schema import (
     DevelopmentItem,
     NewsFindings,
     ReportSchema,
+    SourceItem,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "DevelopmentItem",
     "NewsFindings",
     "ReportSchema",
+    "SourceItem",
 ]
