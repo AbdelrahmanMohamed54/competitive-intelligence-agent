@@ -108,9 +108,9 @@ What counts as a meaningful change:
 1. ✅ schemas/report_schema.py — define ALL Pydantic models first
 2. ✅ tools/web_search.py — Tavily search wrapper
 3. ✅ tools/vector_retriever.py — ChromaDB retrieval tool
-4. observability/langfuse_tracer.py — tracing setup
-5. agents/news_analyst.py — first sub-agent
-6. agents/academic_researcher.py — second sub-agent
+4. ✅ observability/langfuse_tracer.py — tracing setup
+5. ✅ agents/news_analyst.py — first sub-agent
+6. ✅ agents/academic_researcher.py — second sub-agent
 7. agents/competitor_profiler.py — third sub-agent
 8. agents/report_writer.py — synthesis agent
 9. agents/orchestrator.py — LangGraph state machine wiring all agents
@@ -137,3 +137,31 @@ What counts as a meaningful change:
 - ReportSchema has no query field; query tracking stays in AgentState
 - VectorRetriever runs embeddings in a thread-pool executor (never blocks event loop)
 - Tavily SDK is synchronous; search() wraps it in run_in_executor for async callers
+
+## Session 2 — complete (2026-04-12)
+### Tasks finished
+- observability/langfuse_tracer.py: get_tracer(), trace_agent() context manager,
+  score_output(); _NullTracer/_NullTrace/_NullSpan fallback hierarchy
+- agents/news_analyst.py: 5-step pattern (generate queries → parallel search →
+  deduplicate → LLM structure → ChromaDB store); Langfuse-traced
+- agents/academic_researcher.py: same pattern, targets papers/patents/reports
+- tests/test_agents.py: 9 tests — all passing (35 total across both test files)
+
+### Agent pattern established for Session 3 (competitor_profiler)
+Every sub-agent follows this exact structure — copy this for competitor_profiler.py:
+1. _build_llm() — ChatGoogleGenerativeAI from GOOGLE_API_KEY / GEMINI_MODEL env vars
+2. _SearchQueriesOutput Pydantic model — for LLM query generation step
+3. _Raw<Item> and _<Agent>LLMOutput — internal schemas for structured LLM summarisation
+4. _deduplicate(sources) — URL-based dedup, order-preserving
+5. _resolve_sources(urls, url_map, fallback) — maps LLM-cited URLs to SourceItems
+6. async run(state) — wraps all steps in trace_agent(); catches all exceptions into
+   state["errors"]; returns updated state with findings + all_sources appended
+
+### Design decisions
+- Internal LLM output schemas (_Raw*, _*LLMOutput) never leak outside each agent module;
+  the public API always returns typed Pydantic schemas from schemas/report_schema.py
+- Mock pattern for tests: set side_effect on structured_mock.ainvoke (not on
+  structured_mock itself) because agents call .ainvoke(), not the mock directly
+- Each agent uses its own named ChromaDB collection so search spaces don't mix
+- trace_agent context manager is synchronous (contextmanager, not asynccontextmanager)
+  because it just wraps async code, not awaits inside the context body itself
