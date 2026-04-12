@@ -113,7 +113,7 @@ What counts as a meaningful change:
 6. ✅ agents/academic_researcher.py — second sub-agent
 7. ✅ agents/competitor_profiler.py — third sub-agent
 8. ✅ agents/report_writer.py — synthesis agent
-9. agents/orchestrator.py — LangGraph state machine wiring all agents
+9. ✅ agents/orchestrator.py — LangGraph state machine wiring all agents
 10. app/api.py — FastAPI endpoint
 11. app/streamlit_app.py — Streamlit frontend
 12. evaluation/llm_judge.py — quality scoring
@@ -194,3 +194,29 @@ Every sub-agent follows this exact structure — copy this for competitor_profil
 - score_output() receives a section-completeness float (0.0–1.0) as initial
   quality signal; the LLM-as-judge evaluation pipeline in Session 6 will overwrite
   this with a semantic quality score
+
+## Session 4 — complete (2026-04-12)
+### Tasks finished
+- agents/orchestrator.py: LangGraph StateGraph with parallel fan-out/fan-in,
+  conditional early-exit routing, 25s per-node timeout, run_research() entry point
+- tests/test_orchestrator.py: 6 integration tests — all passing (48 total)
+
+### Graph structure
+START → [news_analyst, academic_researcher, competitor_profiler] (parallel) →
+check_node → (conditional) → report_writer → END
+                           ↘ END (early if all agents fail)
+
+### LangGraph-specific design decisions
+- Node wrappers use _extract() to return ONLY owned keys — not {**state, ...}.
+  Returning full state from parallel nodes causes InvalidUpdateError because
+  non-annotated fields (query, start_time) can only be written once per step.
+  AgentState list fields use operator.add reducer so parallel writes merge safely.
+- Fan-in is implicit: LangGraph waits for all edges into 'check' before running it.
+  No explicit join/barrier node is needed.
+- _build_graph() is called fresh each run_research() invocation so node function
+  references are resolved at call time — making agent functions trivially patchable
+  in tests without needing to rebuild the graph.
+- Conditional edge returns END sentinel directly (no path_map dict needed in
+  this LangGraph version) when all sub-agents produced empty findings + errors.
+- Timeout test uses monkeypatch on _AGENT_TIMEOUT module attribute (0.05s) with
+  a 10s sleeping mock to trigger TimeoutError without real waiting.
