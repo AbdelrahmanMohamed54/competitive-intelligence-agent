@@ -114,9 +114,9 @@ What counts as a meaningful change:
 7. ✅ agents/competitor_profiler.py — third sub-agent
 8. ✅ agents/report_writer.py — synthesis agent
 9. ✅ agents/orchestrator.py — LangGraph state machine wiring all agents
-10. app/api.py — FastAPI endpoint
-11. app/streamlit_app.py — Streamlit frontend
-12. evaluation/llm_judge.py — quality scoring
+10. ✅ app/api.py — FastAPI endpoint
+11. ✅ app/streamlit_app.py — Streamlit frontend
+12. ✅ evaluation/llm_judge.py — quality scoring
 
 ## Session 1 — complete (2026-04-12)
 ### Tasks finished
@@ -250,3 +250,49 @@ check_node → (conditional) → report_writer → END
 - Start API:      uvicorn app.api:app --reload --port 8000
 - Start frontend: streamlit run app/streamlit_app.py
 - Both must be running simultaneously for the UI to work
+
+## Session 6 — complete (2026-04-15)
+### Tasks finished
+- evaluation/llm_judge.py: LLMJudge class with score_report() and run_batch_evaluation();
+  EvaluationResult Pydantic model (relevance / factual_grounding / completeness /
+  actionability / overall_score / reasoning / report_generation_time);
+  _JudgeOutput structured LLM output schema; _build_report_text() renderer;
+  _print_summary() table; CLI entry point; results saved to evaluation/results.json
+- evaluation/test_queries.json: 5 benchmark queries — OpenAI, Tesla, Anthropic, DeepMind, Mistral AI
+- evaluation/results.json: batch evaluation output (OpenAI: 5.0/5.0; rest hit Gemini free-tier
+  daily quota of 20 req/day — pipeline ran, judge quota exhausted)
+- Dockerfile: python:3.11-slim base, requirements install, source copy, ChromaDB volume,
+  EXPOSE 8000/8501, CMD uvicorn
+- docker-compose.yml: api + frontend services, shared .env, chroma_data named volume,
+  healthcheck on GET /health, frontend depends_on api healthy
+- .env.example: safe-to-commit template with all 5 env vars documented
+- README.md: Demo section with real OpenAI report output, Results table with evaluation
+  scores, corrected Getting Started commands (venv, both services, Docker Compose option)
+- Final test run: 48/48 passing
+
+### Evaluation results (OpenAI, 2026-04-15)
+- Relevance:          5.0 / 5.0
+- Factual grounding:  5.0 / 5.0
+- Completeness:       5.0 / 5.0
+- Actionability:      5.0 / 5.0
+- Overall:            5.0 / 5.0
+- Report time:        64.9s
+- Sources cited:      52
+- Judge reasoning: "The report is highly relevant, focusing entirely on OpenAI's current
+  status. Factual grounding is excellent with explicit source citations for nearly every
+  claim. All five sections contain substantive and detailed content. Strategic
+  recommendations are specific, actionable, and directly derived from the findings."
+
+### Known limitations
+- Gemini free tier: 20 requests/day — running the full 5-query evaluation suite requires
+  a paid API key (or spread across multiple days)
+- sentence-transformers cold-start: ~15-20s on first run; model is cached after first load
+- ChromaDB persistence: in Docker the .chroma volume persists between runs; locally the
+  .chroma/ folder in the project root is created automatically
+- Tesla query occasionally exceeds 90s on slow connections due to 4 parallel search rounds
+
+### Future improvements
+- Cache sentence-transformers model in Docker image to eliminate cold-start
+- Add streaming SSE endpoint to FastAPI so Streamlit can show per-agent progress
+- Implement Groq fallback in report_writer when Gemini quota is exhausted
+- Add evaluation/results.json comparison across runs (track score trends over time)
