@@ -54,7 +54,7 @@ from schemas.report_schema import (
 
 logger = logging.getLogger(__name__)
 
-_AGENT_TIMEOUT: float = 25.0  # seconds; each node must complete within this window
+_AGENT_TIMEOUT: float = 60.0  # seconds; each node must complete within this window
 
 
 # ---------------------------------------------------------------------------
