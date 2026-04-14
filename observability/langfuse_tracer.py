@@ -5,6 +5,8 @@ Provides a thin wrapper around the Langfuse SDK so that every agent execution,
 LLM call, and tool call is recorded as a structured trace.  If the Langfuse
 keys are absent or the SDK is unavailable the module silently falls back to a
 no-op tracer so the rest of the pipeline is never blocked.
+
+Compatible with Langfuse v4.x (uses start_as_current_observation / create_score).
 """
 
 from __future__ import annotations
@@ -53,14 +55,89 @@ class _NullTrace:
 class _NullTracer:
     """Langfuse-like client that silently discards all calls."""
 
-    def trace(self, **kwargs: Any) -> _NullTrace:  # noqa: ANN401
-        return _NullTrace()
-
-    def score(self, **kwargs: Any) -> None:  # noqa: ANN401
-        pass
-
     def flush(self) -> None:
         pass
+
+    def shutdown(self) -> None:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Langfuse v4 compatibility wrapper
+# ---------------------------------------------------------------------------
+
+
+class _ObservationCompat:
+    """Wraps a Langfuse v4 observation so it looks like the v2/v3 trace object.
+
+    Agents call ``trace.span(name=..., input=...)`` and ``span.end(output=...)``.
+    In v4 the equivalent is ``observation.start_observation(name=..., as_type='span', ...)``,
+    which returns a child observation with its own ``.end()`` and ``.update()`` methods.
+    """
+
+    def __init__(self, observation: Any) -> None:
+        self._obs = observation
+        # Expose trace_id as id so callers can pass it to score_output()
+        self.id: str = getattr(observation, "trace_id", "unknown-trace-id")
+
+    def update(self, **kwargs: Any) -> None:  # noqa: ANN401
+        try:
+            # Map 'output' kwarg; v4 update() accepts it directly
+            self._obs.update(**kwargs)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def span(self, name: str = "", **kwargs: Any) -> _NullSpan:  # noqa: ANN401
+        """Create a child span observation."""
+        try:
+            child = self._obs.start_observation(
+                name=name,
+                as_type="span",
+                input=kwargs.get("input"),
+                metadata=kwargs.get("metadata"),
+            )
+            return _ChildSpanCompat(child)
+        except Exception:  # noqa: BLE001
+            return _NullSpan()
+
+    def generation(self, name: str = "", **kwargs: Any) -> _NullSpan:  # noqa: ANN401
+        """Create a child generation observation."""
+        try:
+            child = self._obs.start_observation(
+                name=name,
+                as_type="generation",
+                input=kwargs.get("input"),
+            )
+            return _ChildSpanCompat(child)
+        except Exception:  # noqa: BLE001
+            return _NullSpan()
+
+    def event(self, **kwargs: Any) -> None:  # noqa: ANN401
+        try:
+            self._obs.create_event(**kwargs)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class _ChildSpanCompat:
+    """Wraps a Langfuse v4 child observation, exposing .end() and .update()."""
+
+    def __init__(self, observation: Any) -> None:
+        self._obs = observation
+
+    def end(self, output: Any = None, **kwargs: Any) -> None:  # noqa: ANN401
+        try:
+            if output is not None:
+                self._obs.update(output=output)
+            self._obs.end()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def update(self, **kwargs: Any) -> None:  # noqa: ANN401
+        try:
+            self._obs.update(**kwargs)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -122,41 +199,51 @@ def trace_agent(
         query:      The original user query driving this execution.
 
     Yields:
-        The active Langfuse trace (or ``_NullTrace`` when tracing is disabled).
+        An observation wrapper (or ``_NullTrace`` when tracing is disabled).
     """
     tracer = get_tracer()
-    trace = tracer.trace(
+
+    # _NullTracer path — yield a no-op trace immediately
+    if isinstance(tracer, _NullTracer):
+        yield _NullTrace()
+        return
+
+    # Real Langfuse v4 client path
+    start = time.perf_counter()
+    ctx_mgr = tracer.start_as_current_observation(
         name=agent_name,
+        as_type="agent",
         input={"query": query},
         metadata={"agent": agent_name},
     )
-    start = time.perf_counter()
-    try:
-        yield trace
-        elapsed = time.perf_counter() - start
-        trace.update(
-            output={
-                "status": "success",
-                "duration_seconds": round(elapsed, 3),
-            }
-        )
-        logger.info("%s completed in %.2fs", agent_name, elapsed)
-    except Exception as exc:  # noqa: BLE001
-        elapsed = time.perf_counter() - start
-        trace.update(
-            output={
-                "status": "error",
-                "error": str(exc),
-                "duration_seconds": round(elapsed, 3),
-            }
-        )
-        logger.error("%s failed after %.2fs: %s", agent_name, elapsed, exc)
-        raise
-    finally:
+    with ctx_mgr as obs:
+        compat = _ObservationCompat(obs)
         try:
-            tracer.flush()
-        except Exception:  # noqa: BLE001
-            pass
+            yield compat
+            elapsed = time.perf_counter() - start
+            obs.update(
+                output={
+                    "status": "success",
+                    "duration_seconds": round(elapsed, 3),
+                }
+            )
+            logger.info("%s completed in %.2fs", agent_name, elapsed)
+        except Exception as exc:  # noqa: BLE001
+            elapsed = time.perf_counter() - start
+            obs.update(
+                output={
+                    "status": "error",
+                    "error": str(exc),
+                    "duration_seconds": round(elapsed, 3),
+                }
+            )
+            logger.error("%s failed after %.2fs: %s", agent_name, elapsed, exc)
+            raise
+        finally:
+            try:
+                tracer.flush()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def score_output(trace_id: str, score: float, comment: str = "") -> None:
@@ -174,7 +261,9 @@ def score_output(trace_id: str, score: float, comment: str = "") -> None:
         return
     try:
         tracer = get_tracer()
-        tracer.score(
+        if isinstance(tracer, _NullTracer):
+            return
+        tracer.create_score(
             trace_id=trace_id,
             name="llm_judge_quality",
             value=score,
