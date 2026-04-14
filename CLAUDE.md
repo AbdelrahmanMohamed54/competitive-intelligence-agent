@@ -220,3 +220,33 @@ check_node → (conditional) → report_writer → END
   this LangGraph version) when all sub-agents produced empty findings + errors.
 - Timeout test uses monkeypatch on _AGENT_TIMEOUT module attribute (0.05s) with
   a 10s sleeping mock to trigger TimeoutError without real waiting.
+- _AGENT_TIMEOUT raised from 25s to 60s after live testing revealed cold-start
+  latency from sentence-transformers model loading exceeds 25s on first run.
+
+## Session 5 — complete (2026-04-15)
+### Tasks finished
+- app/api.py: FastAPI backend with POST /research, GET /health, GET /report/{id};
+  CORSMiddleware, request-logging middleware, global exception handler,
+  OrderedDict LRU report cache (max 10); ResearchRequest/ResearchResponse Pydantic models
+- app/streamlit_app.py: Streamlit frontend with text input + Generate Report button,
+  5 expandable report sections (Executive Summary expanded by default, all others collapsed),
+  per-item source badges, all-sources rollup, JSON download button; st.session_state management
+- observability/langfuse_tracer.py: fixed for Langfuse v4.2.0 API
+  (tracer.trace() → tracer.start_as_current_observation(as_type='agent'),
+   tracer.score() → tracer.create_score(); added _ObservationCompat/_ChildSpanCompat wrappers
+   to preserve trace.span() interface used by all 4 sub-agents)
+- Live end-to-end tests: Anthropic (67s, 49 sources), Tesla autonomous driving (87s, 47 sources)
+  — all 5 sections populated, no errors
+
+### Langfuse v4.x design decisions
+- v4 removed Langfuse.trace() — replacement is start_as_current_observation(as_type='agent')
+  which returns an OTel-backed context manager; observation objects have .update()/.end()/.id
+  but not .span() — added _ObservationCompat wrapper that translates .span(name, input) to
+  observation.start_observation(name, as_type='span') so all existing agent code works unchanged
+- _NullTracer path unchanged — if keys missing, trace_agent() yields _NullTrace immediately
+  without touching the Langfuse SDK at all; all 48 tests still pass with null tracer
+
+### How to run
+- Start API:      uvicorn app.api:app --reload --port 8000
+- Start frontend: streamlit run app/streamlit_app.py
+- Both must be running simultaneously for the UI to work
